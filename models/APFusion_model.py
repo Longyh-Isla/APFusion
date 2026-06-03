@@ -32,6 +32,7 @@ class APFusion(nn.Module):
 
         self.feature_fusion_4 = TextGuidedDWTFusion(channels=dim * 2 ** 3)
         self.prompt_guidance_4 = FeatureWiseAffine(in_channels=512, out_channels=dim * 2 ** 3)
+        self.map_guide_level4 = FeatureMap_guide(kernel_size=7)
 
         self.decoder_level4 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 3), num_heads=heads[3], ffn_expansion_factor=ffn_expansion_factor,
@@ -40,6 +41,7 @@ class APFusion(nn.Module):
 
         self.feature_fusion_3 = TextGuidedDWTFusion(channels=dim * 2 ** 2)
         self.prompt_guidance_3 = FeatureWiseAffine(in_channels=512, out_channels=dim * 2 ** 2)
+        self.map_guide_level3 = FeatureMap_guide(kernel_size=7)
 
         self.up4_3 = Upsample(int(dim * 2 ** 3))  ## From Level 4 to Level 3
         self.reduce_chan_level3 = nn.Conv2d(int(dim * 2 ** 3), int(dim * 2 ** 2), kernel_size=1, bias=bias)
@@ -49,6 +51,7 @@ class APFusion(nn.Module):
 
         self.feature_fusion_2 = TextGuidedDWTFusion(channels=dim * 2 ** 1)
         self.prompt_guidance_2 = FeatureWiseAffine(in_channels=512, out_channels=dim * 2 ** 1)
+        self.map_guide_level2 = FeatureMap_guide(kernel_size=7)
         self.up3_2 = Upsample(int(dim * 2 ** 2))  ## From Level 3 to Level 2
         self.reduce_chan_level2 = nn.Conv2d(int(dim * 2 ** 2), int(dim * 2 ** 1), kernel_size=1, bias=bias)
         self.decoder_level2 = nn.Sequential(*[
@@ -57,6 +60,7 @@ class APFusion(nn.Module):
 
         self.feature_fusion_1 = TextGuidedDWTFusion(channels=dim)
         self.prompt_guidance_1 = FeatureWiseAffine(in_channels=512, out_channels=dim)
+        self.map_guide_level1 = FeatureMap_guide(kernel_size=7)
         self.up2_1 = Upsample(int(dim * 2 ** 1))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
         self.decoder_level1 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 0), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor,
@@ -87,6 +91,7 @@ class APFusion(nn.Module):
 
         out_dec_level4 = self.decoder_level4(inp_dec_level4)
         out_dec_level4 = self.prompt_guidance_4(out_dec_level4, text_fuse_features)
+        out_dec_level4 = self.map_guide_level4(out_dec_level4)
         out_enc_level4 = self.feature_fusion_4(out_enc_level4_A, out_enc_level4_B, text_fuse_features)
         out_dec_level4 = torch.cat([out_dec_level4, out_enc_level4], 1)
         out_dec_level4 = self.reduce_chan_level4(out_dec_level4)
@@ -95,6 +100,7 @@ class APFusion(nn.Module):
 
         out_dec_level3 = self.decoder_level3(inp_dec_level3)
         out_dec_level3 = self.prompt_guidance_3(out_dec_level3, text_fuse_features)
+        out_dec_level3 = self.map_guide_level3(out_dec_level3)
         out_enc_level3 = self.feature_fusion_3(out_enc_level3_A, out_enc_level3_B, text_fuse_features)
         out_dec_level3 = torch.cat([out_dec_level3, out_enc_level3], 1)
         out_dec_level3 = self.reduce_chan_level3(out_dec_level3)
@@ -103,6 +109,7 @@ class APFusion(nn.Module):
 
         out_dec_level2 = self.decoder_level2(inp_dec_level2)
         out_dec_level2 = self.prompt_guidance_2(out_dec_level2, text_fuse_features)
+        out_dec_level2 = self.map_guide_level2(out_dec_level2)
         out_enc_level2 = self.feature_fusion_2(out_enc_level2_A, out_enc_level2_B, text_fuse_features)
         out_dec_level2 = torch.cat([out_dec_level2, out_enc_level2], 1)
         out_dec_level2 = self.reduce_chan_level2(out_dec_level2)
@@ -111,6 +118,7 @@ class APFusion(nn.Module):
 
         out_dec_level1 = self.decoder_level1(inp_dec_level1)
         out_dec_level1 = self.prompt_guidance_1(out_dec_level1, text_fuse_features)
+        out_dec_level1 = self.map_guide_level1(out_dec_level1)
         out_enc_level1 = self.feature_fusion_1(out_enc_level1_A, out_enc_level1_B, text_fuse_features)
         out_dec_level1 = torch.cat([out_dec_level1, out_enc_level1], 1)
         out_dec_level1 = self.reduce_chan_level1(out_dec_level1)
@@ -408,7 +416,6 @@ class FeatureWiseAffine(nn.Module):
     def __init__(self, in_channels, out_channels, use_affine_level=True):
         super(FeatureWiseAffine, self).__init__()
         self.use_affine_level = use_affine_level
-        # MLP 输出 gamma 和 beta
         self.MLP = nn.Sequential(
             nn.Linear(in_channels, in_channels * 2),
             nn.LeakyReLU(),
@@ -417,11 +424,9 @@ class FeatureWiseAffine(nn.Module):
 
     def forward(self, x, text_embed):
         B, C, H, W = x.shape
-        # 生成 gamma 和 beta
 
         gamma, beta = self.MLP(text_embed).view(B, -1, 1, 1).chunk(2, dim=1)  # [B, C, 1, 1]
 
-        # 门控调制
         x = (1 + gamma) * x + beta
 
         return x
